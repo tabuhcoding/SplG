@@ -38,6 +38,8 @@ async function postJson(url, body) {
   return data;
 }
 
+const NAME_SYNC_DELAY_MS = 700;
+
 function LocalSetupModal({ onStart }) {
   const [names, setNames] = useState(["user 1", "user 2"]);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -133,9 +135,14 @@ function LobbyScreen({ busy, deviceId, notice, onLobbyChange, onPlay, players, r
   const ownedNames = ownedPlayers.map((player) => player.name);
   const [draftNames, setDraftNames] = useState(ownedNames);
   const [draftSettings, setDraftSettings] = useState(settings);
+  const draftSettingsRef = useRef(settings);
+  const nameEditingRef = useRef(false);
+  const nameSyncSeqRef = useRef(0);
+  const nameSyncTimerRef = useRef(null);
   const totalPlayers = players.length;
 
   useEffect(() => {
+    if (nameEditingRef.current) return;
     setDraftNames(ownedNames);
   }, [ownedPlayers.map((player) => `${player.id}:${player.name}`).join("|")]);
 
@@ -143,12 +150,44 @@ function LobbyScreen({ busy, deviceId, notice, onLobbyChange, onPlay, players, r
     setDraftSettings(settings);
   }, [settings.chipCount, settings.maxChips, settings.targetScore]);
 
+  useEffect(() => {
+    draftSettingsRef.current = draftSettings;
+  }, [draftSettings]);
+
+  useEffect(() => {
+    return () => {
+      if (nameSyncTimerRef.current) window.clearTimeout(nameSyncTimerRef.current);
+    };
+  }, []);
+
   const publishNames = (names) => {
+    if (nameSyncTimerRef.current) window.clearTimeout(nameSyncTimerRef.current);
+    nameEditingRef.current = false;
+    nameSyncSeqRef.current += 1;
     setDraftNames(names);
     onLobbyChange({
       names: names.map((name, index) => name || `user ${index + 1}`),
       settings: draftSettings,
     });
+  };
+
+  const scheduleNameSync = (names) => {
+    setDraftNames(names);
+    nameEditingRef.current = true;
+    nameSyncSeqRef.current += 1;
+    const syncSeq = nameSyncSeqRef.current;
+
+    if (nameSyncTimerRef.current) window.clearTimeout(nameSyncTimerRef.current);
+    nameSyncTimerRef.current = window.setTimeout(() => {
+      Promise.resolve(
+        onLobbyChange({
+          names: names.map((name, index) => name || `user ${index + 1}`),
+          settings: draftSettingsRef.current,
+        })
+      ).finally(() => {
+        if (nameSyncSeqRef.current === syncSeq) nameEditingRef.current = false;
+      });
+    }, NAME_SYNC_DELAY_MS);
   };
 
   const updateSetting = (key, value) => {
@@ -194,7 +233,7 @@ function LobbyScreen({ busy, deviceId, notice, onLobbyChange, onPlay, players, r
                   maxLength={8}
                   onChange={(event) => {
                     const next = draftNames.map((name, index) => (ownedPlayers[index].id === player.id ? event.target.value : name));
-                    publishNames(next);
+                    scheduleNameSync(next);
                   }}
                   value={draftNames[ownedPlayers.findIndex((item) => item.id === player.id)] ?? player.name}
                 />
