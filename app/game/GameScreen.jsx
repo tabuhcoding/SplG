@@ -1,20 +1,25 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { BASE_SIZES, CHIP_ORDER, GEM_LABELS, GEM_ORDER } from "./config";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BASE_SIZES, CHIP_ORDER, seatColor } from "./config";
 import {
   applyGameAction,
   bankCount,
   canTakeNoble,
+  chipAddBlocker,
   createEmptyTableState,
   DEFAULT_SETTINGS,
+  describeCollect,
   emptyChips,
   getActivePlayer,
   joinLobby,
   startPlaying,
 } from "./engine";
 import { createBrowserSupabaseClient, hasSupabaseConfig } from "./supabase";
+import { ActionDock } from "./components/ActionDock";
+import { CardSheet } from "./components/CardSheet";
 import { GameBoard } from "./components/GameBoard";
+import { Toast } from "./components/Toast";
 
 function getDeviceId() {
   const key = "splendor_device_id";
@@ -34,14 +39,97 @@ async function postJson(url, body) {
     method: "POST",
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "Request failed.");
+  if (!response.ok) throw new Error(data.error || "Không gửi được yêu cầu.");
   return data;
 }
 
 const NAME_SYNC_DELAY_MS = 700;
+const ZOOM_KEY = "splendor_zoom";
+const MIN_SCALE = 0.7;
+const MAX_SCALE = 1.25;
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Sizes the board so a full row (deck + 4 cards) plus the noble column fits the
+ * play area, and on roomy screens the three rows fit the height too. `zoom` is the
+ * player's manual nudge on top of that.
+ *
+ * The measured node is the play area, whose size comes from the layout rather than
+ * from the cards inside it — otherwise resizing the cards would feed back into the
+ * measurement.
+ */
+function useBoardScale(zoom, hasReserved) {
+  const playRef = useRef(null);
+  const [auto, setAuto] = useState(0.86);
+
+  useEffect(() => {
+    const node = playRef.current;
+    if (!node) return undefined;
+
+    const measure = () => {
+      const width = node.clientWidth;
+      if (!width) return;
+      const gap = 10;
+      const wide = window.innerWidth > 860;
+      const rowWidth = BASE_SIZES.cardWidth * 5 + (wide ? BASE_SIZES.nobleSize * 0.86 : 0);
+      let next = (width - gap * 5) / rowWidth;
+
+      if (wide) {
+        const available = window.innerHeight - node.getBoundingClientRect().top - 108;
+        // Three market rows, plus the shorter reserved row once someone holds a card.
+        const rows = BASE_SIZES.cardHeight * (hasReserved ? 3.62 : 3);
+        const chrome = gap * (hasReserved ? 3 : 2) + (hasReserved ? 22 : 0);
+        next = Math.min(next, (available - chrome) / rows);
+      }
+
+      const clamped = clamp(next, MIN_SCALE, MAX_SCALE);
+      setAuto((current) => (Math.abs(current - clamped) > 0.01 ? clamped : current));
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [hasReserved]);
+
+  return { playRef, scale: clamp(auto * zoom, 0.55, 1.4) };
+}
+
+function SettingsFields({ busy, onChange, settings }) {
+  const fields = [
+    ["chipCount", "Chip mỗi màu"],
+    ["targetScore", "Điểm để thắng"],
+    ["maxChips", "Chip tối đa trên tay"],
+  ];
+
+  return (
+    <div className="field-grid">
+      {fields.map(([key, label]) => (
+        <label className="field" key={key}>
+          <span>{label}</span>
+          <input
+            disabled={busy}
+            inputMode="numeric"
+            min="1"
+            onChange={(event) => onChange(key, event.target.value)}
+            type="number"
+            value={settings[key]}
+          />
+        </label>
+      ))}
+    </div>
+  );
+}
 
 function LocalSetupModal({ onStart }) {
-  const [names, setNames] = useState(["user 1", "user 2"]);
+  const [names, setNames] = useState(["Người 1", "Người 2"]);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
 
   const updateSetting = (key, value) => {
@@ -49,16 +137,16 @@ function LocalSetupModal({ onStart }) {
   };
 
   return (
-    <div className="setup-backdrop">
-      <section className="setup-modal" aria-label="Game setup">
-        <div>
-          <h2>{mode === "join" ? "Join Splendor Table" : "New Splendor Game"}</h2>
-          <p>Choose this device's players and starting limits.</p>
-        </div>
+    <div className="sheet-backdrop">
+      <section className="modal" aria-label="Tạo ván mới">
+        <header className="modal-head">
+          <h2>Ván Splendor mới</h2>
+          <p>Chơi chung một máy — chọn người chơi và luật nhà.</p>
+        </header>
 
-        <div className="setup-field">
-          <span>Users on this device</span>
-          <div className="setup-users">
+        <div className="field">
+          <span>Người chơi trên máy này</span>
+          <div className="name-grid">
             {names.map((name, index) => (
               <input
                 key={index}
@@ -72,58 +160,30 @@ function LocalSetupModal({ onStart }) {
               />
             ))}
           </div>
-          <div className="setup-actions">
+          <div className="row-actions">
             <button
-            disabled={names.length >= 5}
+              className="btn btn-quiet"
+              disabled={names.length >= 5}
               type="button"
-              onClick={() => setNames((value) => [...value, `user ${value.length + 1}`])}
+              onClick={() => setNames((value) => [...value, `Người ${value.length + 1}`])}
             >
-              Add
+              Thêm người
             </button>
             <button
+              className="btn btn-ghost"
               disabled={names.length <= 1}
               type="button"
               onClick={() => setNames((value) => value.slice(0, -1))}
             >
-              Remove
+              Bớt
             </button>
           </div>
         </div>
 
-        <label className="setup-field">
-          <span>Chips per color</span>
-          <input
-            min="1"
-            onChange={(event) => updateSetting("chipCount", event.target.value)}
-            type="number"
-            value={settings.chipCount}
-          />
-        </label>
-        <label className="setup-field">
-          <span>Target score</span>
-          <input
-            min="1"
-            onChange={(event) => updateSetting("targetScore", event.target.value)}
-            type="number"
-            value={settings.targetScore}
-          />
-        </label>
-        <label className="setup-field">
-          <span>Max chips in hand</span>
-          <input
-            min="1"
-            onChange={(event) => updateSetting("maxChips", event.target.value)}
-            type="number"
-            value={settings.maxChips}
-          />
-        </label>
+        <SettingsFields onChange={updateSetting} settings={settings} />
 
-        <button
-          className="primary-button"
-          type="button"
-          onClick={() => onStart({ names, settings })}
-        >
-          Start Game
+        <button className="btn btn-primary btn-block" type="button" onClick={() => onStart({ names, settings })}>
+          Bắt đầu
         </button>
       </section>
     </div>
@@ -166,7 +226,7 @@ function LobbyScreen({ busy, deviceId, notice, onLobbyChange, onPlay, players, r
     nameSyncSeqRef.current += 1;
     setDraftNames(names);
     onLobbyChange({
-      names: names.map((name, index) => name || `user ${index + 1}`),
+      names: names.map((name, index) => name || `Người ${index + 1}`),
       settings: draftSettings,
     });
   };
@@ -181,7 +241,7 @@ function LobbyScreen({ busy, deviceId, notice, onLobbyChange, onPlay, players, r
     nameSyncTimerRef.current = window.setTimeout(() => {
       Promise.resolve(
         onLobbyChange({
-          names: names.map((name, index) => name || `user ${index + 1}`),
+          names: names.map((name, index) => name || `Người ${index + 1}`),
           settings: draftSettingsRef.current,
         })
       ).finally(() => {
@@ -193,96 +253,73 @@ function LobbyScreen({ busy, deviceId, notice, onLobbyChange, onPlay, players, r
   const updateSetting = (key, value) => {
     const nextSettings = { ...draftSettings, [key]: Math.max(1, Number(value) || 1) };
     setDraftSettings(nextSettings);
-    onLobbyChange({
-      names: draftNames,
-      settings: nextSettings,
-    });
+    onLobbyChange({ names: draftNames, settings: nextSettings });
   };
 
   return (
-    <div className="setup-backdrop">
-      <section className="setup-modal lobby-modal" aria-label="Game lobby">
-        <div>
-          <h2>Splendor Lobby</h2>
-          <p>{players.length ? `${players.length}/5 players joined` : "No players joined yet."}</p>
-        </div>
-        {notice ? <div className="notice-line">{notice}</div> : null}
+    <div className="sheet-backdrop">
+      <section className="modal modal-wide" aria-label="Phòng chờ">
+        <header className="modal-head">
+          <h2>Phòng chờ Splendor</h2>
+          <p>{players.length ? `${players.length}/5 người đã vào bàn` : "Chưa có ai vào bàn."}</p>
+        </header>
+        {notice ? <div className="inline-note">{notice}</div> : null}
 
-        <div className="setup-actions">
+        <div className="row-actions">
           <button
+            className="btn btn-quiet"
             disabled={busy || totalPlayers >= 5}
             type="button"
-            onClick={() => publishNames([...draftNames, `user ${draftNames.length + 1}`])}
+            onClick={() => publishNames([...draftNames, `Người ${draftNames.length + 1}`])}
           >
-            Add User
+            Thêm người trên máy này
           </button>
           <button
+            className="btn btn-ghost"
             disabled={busy || draftNames.length === 0}
             type="button"
             onClick={() => publishNames(draftNames.slice(0, -1))}
           >
-            Remove Mine
+            Bớt
           </button>
         </div>
 
         <div className="lobby-list">
-          {players.map((player) => (
-            <div className="lobby-player" key={player.id}>
-              {player.ownerDeviceId === deviceId ? (
-                <input
-                  maxLength={8}
-                  onChange={(event) => {
-                    const next = draftNames.map((name, index) => (ownedPlayers[index].id === player.id ? event.target.value : name));
-                    scheduleNameSync(next);
-                  }}
-                  value={draftNames[ownedPlayers.findIndex((item) => item.id === player.id)] ?? player.name}
-                />
-              ) : (
-                <strong>{player.name}</strong>
-              )}
-              <span>{player.ownerDeviceId === deviceId ? "This device" : "Other device"}</span>
-            </div>
-          ))}
+          {players.map((player, index) => {
+            const mine = player.ownerDeviceId === deviceId;
+            return (
+              <div className={`lobby-player${mine ? " lobby-player-mine" : ""}`} key={player.id}>
+                <span className="seat-dot" style={{ "--seat": seatColor(index) }} />
+                {mine ? (
+                  <input
+                    maxLength={8}
+                    onChange={(event) => {
+                      const next = draftNames.map((name, nameIndex) =>
+                        ownedPlayers[nameIndex].id === player.id ? event.target.value : name
+                      );
+                      scheduleNameSync(next);
+                    }}
+                    value={draftNames[ownedPlayers.findIndex((item) => item.id === player.id)] ?? player.name}
+                  />
+                ) : (
+                  <strong>{player.name}</strong>
+                )}
+                <span className="lobby-where">{mine ? "Máy này" : "Máy khác"}</span>
+              </div>
+            );
+          })}
         </div>
 
-        <div className="lobby-settings">
-          <label className="setup-field">
-            <span>Chips per color</span>
-            <input
-              disabled={busy}
-              min="1"
-              onChange={(event) => updateSetting("chipCount", event.target.value)}
-              type="number"
-              value={draftSettings.chipCount}
-            />
-          </label>
-          <label className="setup-field">
-            <span>Target score</span>
-            <input
-              disabled={busy}
-              min="1"
-              onChange={(event) => updateSetting("targetScore", event.target.value)}
-              type="number"
-              value={draftSettings.targetScore}
-            />
-          </label>
-          <label className="setup-field">
-            <span>Max chips in hand</span>
-            <input
-              disabled={busy}
-              min="1"
-              onChange={(event) => updateSetting("maxChips", event.target.value)}
-              type="number"
-              value={draftSettings.maxChips}
-            />
-          </label>
-        </div>
+        <SettingsFields busy={busy} onChange={updateSetting} settings={draftSettings} />
 
-        <div className="setup-actions">
-          <button disabled={busy || draftNames.length === 0 || rowVersion == null} type="button" onClick={onPlay}>
-            Play
-          </button>
-        </div>
+        <button
+          className="btn btn-primary btn-block"
+          disabled={busy || draftNames.length === 0 || rowVersion == null}
+          type="button"
+          onClick={onPlay}
+        >
+          Vào ván
+        </button>
       </section>
     </div>
   );
@@ -292,19 +329,19 @@ function BlockedTable({ notice, onReset }) {
   const [password, setPassword] = useState("");
 
   return (
-    <main className="blocked-table">
-      <section className="setup-modal">
-        <div>
-          <h2>Table already playing</h2>
-          <p>This device is not part of the current table.</p>
-        </div>
-        {notice ? <div className="notice-line">{notice}</div> : null}
-        <label className="setup-field">
-          <span>Reset password</span>
+    <main className="blocked">
+      <section className="modal">
+        <header className="modal-head">
+          <h2>Bàn đang có ván chạy</h2>
+          <p>Máy này không nằm trong bàn hiện tại. Chờ ván kết thúc, hoặc reset bàn.</p>
+        </header>
+        {notice ? <div className="inline-note">{notice}</div> : null}
+        <label className="field">
+          <span>Mật khẩu reset</span>
           <input onChange={(event) => setPassword(event.target.value)} type="password" value={password} />
         </label>
-        <button className="primary-button" type="button" onClick={() => onReset(password)}>
-          Reset Table
+        <button className="btn btn-primary btn-block" type="button" onClick={() => onReset(password)}>
+          Reset bàn
         </button>
       </section>
     </main>
@@ -315,23 +352,23 @@ function ResetModal({ busy, notice, onClose, onReset }) {
   const [password, setPassword] = useState("");
 
   return (
-    <div className="setup-backdrop">
-      <section className="setup-modal" aria-label="Reset table">
-        <div>
-          <h2>Reset Table</h2>
-          <p>Reset the current table for everyone.</p>
-        </div>
-        {notice ? <div className="notice-line">{notice}</div> : null}
-        <label className="setup-field">
-          <span>Reset password</span>
+    <div className="sheet-backdrop" onClick={onClose} role="presentation">
+      <section className="modal" aria-label="Reset bàn" onClick={(event) => event.stopPropagation()}>
+        <header className="modal-head">
+          <h2>Reset bàn</h2>
+          <p>Xoá ván hiện tại của tất cả mọi người.</p>
+        </header>
+        {notice ? <div className="inline-note">{notice}</div> : null}
+        <label className="field">
+          <span>Mật khẩu reset</span>
           <input onChange={(event) => setPassword(event.target.value)} type="password" value={password} />
         </label>
-        <div className="setup-actions">
-          <button disabled={busy} type="button" onClick={() => onReset(password)}>
-            Reset
+        <div className="row-actions row-actions-end">
+          <button className="btn btn-ghost" disabled={busy} type="button" onClick={onClose}>
+            Huỷ
           </button>
-          <button disabled={busy} type="button" onClick={onClose}>
-            Cancel
+          <button className="btn btn-primary" disabled={busy} type="button" onClick={() => onReset(password)}>
+            Reset
           </button>
         </div>
       </section>
@@ -343,14 +380,15 @@ function WinnerModal({ busy, onBackToLobby, winner }) {
   if (!winner) return null;
 
   return (
-    <div className="setup-backdrop">
-      <section className="setup-modal winner-modal" aria-label="Winner">
-        <div>
-          <h2>{winner.name} wins</h2>
-          <p>{winner.score} points reached.</p>
+    <div className="sheet-backdrop">
+      <section className="modal modal-winner" aria-label="Kết quả">
+        <div className="winner-crown" aria-hidden="true">
+          👑
         </div>
-        <button className="primary-button" disabled={busy} type="button" onClick={onBackToLobby}>
-          Back to Lobby
+        <h2>{winner.name} thắng!</h2>
+        <p>{winner.score} điểm.</p>
+        <button className="btn btn-primary btn-block" disabled={busy} type="button" onClick={onBackToLobby}>
+          Về phòng chờ
         </button>
       </section>
     </div>
@@ -359,7 +397,7 @@ function WinnerModal({ busy, onBackToLobby, winner }) {
 
 export function GameScreen() {
   const onlineEnabled = hasSupabaseConfig();
-  const [scale, setScale] = useState(0.86);
+  const [zoom, setZoom] = useState(1);
   const [deviceId, setDeviceId] = useState("");
   const [rowVersion, setRowVersion] = useState(null);
   const [setupOpen, setSetupOpen] = useState(!onlineEnabled);
@@ -367,23 +405,53 @@ export function GameScreen() {
   const [state, setState] = useState(() => createEmptyTableState());
   const [selectedChips, setSelectedChips] = useState(emptyChips());
   const [selectedCard, setSelectedCard] = useState(null);
-  const [goldColor, setGoldColor] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const soundReadyRef = useRef(false);
   const lastTurnPlayerRef = useRef("");
+  const { playRef, scale } = useBoardScale(zoom, state.game.table.reserved.length > 0);
 
   const activePlayer = getActivePlayer(state);
+  const activeIndex = state.game.activePlayerIndex;
   const controlsActivePlayer = Boolean(
     state.status === "playing" && activePlayer && (!onlineEnabled || activePlayer.ownerDeviceId === deviceId)
   );
-  const shouldEndTurn = state.status === "playing" && (state.game.turnActions.main || state.game.turnActions.noble);
-  const showYourTurn = controlsActivePlayer;
+  const turnDone = state.status === "playing" && (state.game.turnActions.main || state.game.turnActions.noble);
   const blockedFromPlaying =
     onlineEnabled &&
     state.status === "playing" &&
     deviceId &&
     !state.devices.some((device) => device.deviceId === deviceId);
+
+  /**
+   * Whose chips the board hints are drawn for: the player about to move when this
+   * device controls them, otherwise this device's own seat so you can plan ahead.
+   */
+  const viewer = useMemo(() => {
+    if (state.status !== "playing") return null;
+    if (controlsActivePlayer) return activePlayer;
+    const mine = state.players.find((player) => player.ownerDeviceId === deviceId);
+    return mine ?? activePlayer ?? null;
+  }, [activePlayer, controlsActivePlayer, deviceId, state.players, state.status]);
+
+  const hasSelection = CHIP_ORDER.some((color) => selectedChips[color] > 0);
+  const collect = useMemo(
+    () => (state.status === "playing" ? describeCollect(state, selectedChips, activePlayer) : { ok: false, message: "" }),
+    [activePlayer, selectedChips, state]
+  );
+
+  useEffect(() => {
+    const stored = Number(window.localStorage.getItem(ZOOM_KEY));
+    if (stored >= 0.6 && stored <= 1.4) setZoom(stored);
+  }, []);
+
+  const nudgeZoom = (delta) => {
+    setZoom((current) => {
+      const next = Math.round(clamp(current + delta, 0.6, 1.4) * 100) / 100;
+      window.localStorage.setItem(ZOOM_KEY, String(next));
+      return next;
+    });
+  };
 
   useEffect(() => {
     const unlockSound = () => {
@@ -399,7 +467,7 @@ export function GameScreen() {
 
   useEffect(() => {
     const activeId = activePlayer?.id ?? "";
-    if (!showYourTurn || !activeId || lastTurnPlayerRef.current === activeId) return;
+    if (!controlsActivePlayer || !activeId || lastTurnPlayerRef.current === activeId) return;
     lastTurnPlayerRef.current = activeId;
     if (!soundReadyRef.current) return;
 
@@ -419,14 +487,14 @@ export function GameScreen() {
     oscillator.start();
     oscillator.stop(audio.currentTime + 0.2);
     window.setTimeout(() => audio.close(), 260);
-  }, [activePlayer?.id, showYourTurn]);
+  }, [activePlayer?.id, controlsActivePlayer]);
 
   useEffect(() => {
-    if (!showYourTurn) lastTurnPlayerRef.current = activePlayer?.id ?? "";
-  }, [activePlayer?.id, showYourTurn]);
+    if (!controlsActivePlayer) lastTurnPlayerRef.current = activePlayer?.id ?? "";
+  }, [activePlayer?.id, controlsActivePlayer]);
 
   useEffect(() => {
-    if (!onlineEnabled) return;
+    if (!onlineEnabled) return undefined;
 
     const currentDeviceId = getDeviceId();
     setDeviceId(currentDeviceId);
@@ -460,7 +528,6 @@ export function GameScreen() {
           applyRow(payload.new);
           setSelectedChips(emptyChips());
           setSelectedCard(null);
-          setGoldColor("");
         }
       )
       .subscribe();
@@ -530,7 +597,7 @@ export function GameScreen() {
     const actionPlayer = activePlayer ?? state.players[0];
     if (!actionPlayer && action.type !== "BACK_TO_LOBBY") return;
     if (!controlsActivePlayer && action.type !== "UNDO" && action.type !== "BACK_TO_LOBBY") {
-      setNotice("This device does not control the active player.");
+      setNotice("Máy này không điều khiển người đang tới lượt.");
       return;
     }
 
@@ -539,7 +606,6 @@ export function GameScreen() {
         setState((current) => applyGameAction(current, { deviceId: "local", playerId: actionPlayer?.id, action }));
         setSelectedChips(emptyChips());
         setSelectedCard(null);
-        setGoldColor("");
         setNotice("");
       } catch (error) {
         setNotice(error.message);
@@ -559,7 +625,6 @@ export function GameScreen() {
       setRowVersion(data.row.version);
       setSelectedChips(emptyChips());
       setSelectedCard(null);
-      setGoldColor("");
       setNotice("");
     } catch (error) {
       setNotice(error.message);
@@ -576,169 +641,161 @@ export function GameScreen() {
     }
   };
 
-  const cycleChipSelection = (color) => {
+  /**
+   * Tap adds one chip. Tapping again takes a second of the same color when that is
+   * legal (the two-same-color move), otherwise it puts the chip back.
+   */
+  const toggleChip = (color) => {
     if (!controlsActivePlayer || state.game.turnActions.main) return;
-    if (color === "yellow" || bankCount(state.game.table.bank, color) <= 0) return;
+    const current = selectedChips[color] ?? 0;
+    const blocker = chipAddBlocker(state, selectedChips, activePlayer, color);
+
+    if (blocker) {
+      if (current > 0) {
+        setNotice("");
+        setSelectedChips((chips) => ({ ...chips, [color]: 0 }));
+      } else {
+        setNotice(blocker);
+      }
+      return;
+    }
+
     setNotice("");
-    setSelectedChips((current) => {
-      const next = emptyChips();
-      const nextCount = ((current[color] ?? 0) + 1) % 3;
-
-      if (nextCount === 2) {
-        next[color] = Math.min(2, bankCount(state.game.table.bank, color));
-        return next;
-      }
-
-      Object.assign(next, current);
-      if ((current[color] ?? 0) === 0) {
-        const selectedColorCount = GEM_ORDER.filter((gemColor) => current[gemColor] > 0).length;
-        if (selectedColorCount >= 3) return current;
-      }
-      next[color] = Math.min(nextCount, bankCount(state.game.table.bank, color));
-      for (const other of GEM_ORDER) {
-        if (other !== color && next[other] > 1) next[other] = 1;
-      }
-      return next;
-    });
+    setSelectedChips((chips) => ({ ...chips, [color]: (chips[color] ?? 0) + 1 }));
   };
 
-  const canCollectNoble = (noble) => controlsActivePlayer && !state.game.turnActions.noble && canTakeNoble(activePlayer, noble);
-  const openSetup = () => {
-    setSetupOpen(true);
-  };
+  const chipBlockerFor = useCallback(
+    (color) => {
+      if (!controlsActivePlayer) return "Chưa tới lượt máy này.";
+      if (state.game.turnActions.main) return "Lượt này đã dùng hành động chính.";
+      return chipAddBlocker(state, selectedChips, activePlayer, color);
+    },
+    [activePlayer, controlsActivePlayer, selectedChips, state]
+  );
+
+  const canCollectNoble = (noble) =>
+    controlsActivePlayer && !state.game.turnActions.noble && canTakeNoble(activePlayer, noble);
 
   if (blockedFromPlaying) {
     return <BlockedTable notice={notice} onReset={resetOnlineTable} />;
   }
 
   const shouldShowLobby = onlineEnabled && state.status !== "playing";
+  const playing = state.status === "playing";
 
   return (
     <main
-      className="game-shell"
+      className="shell"
       style={{
         "--scale": scale,
         "--card-width": `${BASE_SIZES.cardWidth * scale}px`,
         "--card-height": `${BASE_SIZES.cardHeight * scale}px`,
-        "--noble-size": `${BASE_SIZES.nobleSize * scale}px`,
+        "--noble-size": `${BASE_SIZES.nobleSize * scale * 0.86}px`,
         "--chip-size": `${BASE_SIZES.chipSize * scale}px`,
       }}
     >
-      <header className="game-toolbar">
-        <div>
+      <header className="topbar">
+        <div className="brand">
           <h1>Splendor</h1>
           <p>
-            Max chip {state.game.settings.maxChips} · Win {state.game.settings.targetScore} pts · Turn{" "}
-            {activePlayer?.name ?? "none"}
-            {onlineEnabled ? " · Online" : " · Local"}
+            {state.game.settings.targetScore} điểm · tối đa {state.game.settings.maxChips} chip ·{" "}
+            {onlineEnabled ? "nhiều máy" : "một máy"}
           </p>
         </div>
 
-        <div className="toolbar-actions">
+        {playing && activePlayer ? (
+          <div
+            className={`turn-pill${controlsActivePlayer ? " turn-pill-mine" : ""}`}
+            style={{ "--seat": seatColor(activeIndex) }}
+          >
+            <span className="seat-dot" />
+            <span>
+              {controlsActivePlayer ? "Lượt của " : "Đang chờ "}
+              <strong>{activePlayer.name}</strong>
+            </span>
+          </div>
+        ) : null}
+
+        <div className="topbar-actions">
+          <div className="zoom">
+            <button aria-label="Thu nhỏ" onClick={() => nudgeZoom(-0.1)} type="button">
+              −
+            </button>
+            <span>{Math.round(scale * 100)}%</span>
+            <button aria-label="Phóng to" onClick={() => nudgeZoom(0.1)} type="button">
+              +
+            </button>
+          </div>
           {onlineEnabled ? (
-            <button disabled={busy} type="button" onClick={() => setResetOpen(true)}>
+            <button className="btn btn-ghost" disabled={busy} type="button" onClick={() => setResetOpen(true)}>
               Reset
             </button>
           ) : (
-            <button disabled={busy} type="button" onClick={openSetup}>
-              Restart
+            <button className="btn btn-ghost" disabled={busy} type="button" onClick={() => setSetupOpen(true)}>
+              Ván mới
             </button>
           )}
-          <label className="scale-control">
-            <span>Scale</span>
-            <input
-              max="1.2"
-              min="0.55"
-              onChange={(event) => setScale(Number(event.target.value))}
-              step="0.01"
-              type="range"
-              value={scale}
-            />
-            <strong>{Math.round(scale * 100)}%</strong>
-          </label>
         </div>
       </header>
 
-      {showYourTurn ? (
-        <div className={`turn-banner${shouldEndTurn ? " turn-banner-ready" : ""}`}>
-          <strong>Your turn</strong>
-          <span>{shouldEndTurn ? "Action done. End turn when ready." : `${activePlayer.name} is active.`}</span>
-        </div>
-      ) : null}
+      <div className="frame">
+        <GameBoard
+          activePlayerId={activePlayer?.id}
+          canTakeNoble={canCollectNoble}
+          chipBlockerFor={chipBlockerFor}
+          currentDeviceId={onlineEnabled ? deviceId : ""}
+          history={state.game.history}
+          maxChips={state.game.settings.maxChips}
+          onCardClick={(payload) => {
+            if (!controlsActivePlayer) {
+              setNotice("Chưa tới lượt máy này.");
+              return;
+            }
+            setSelectedCard(payload);
+            setNotice("");
+          }}
+          onChipClick={toggleChip}
+          onCollectNoble={(noble) => dispatchGameAction({ type: "COLLECT_NOBLE", payload: { noble } })}
+          playRef={playRef}
+          players={state.players}
+          selectedCardId={selectedCard?.card?.id}
+          selectedChips={selectedChips}
+          table={state.game.table}
+          viewer={viewer}
+        />
+      </div>
 
-      <GameBoard
-        activePlayerId={activePlayer?.id}
-        canTakeNoble={canCollectNoble}
-        currentDeviceId={deviceId}
-        history={state.game.history}
-        notice={notice || (!controlsActivePlayer && state.status === "playing" ? "Waiting for this device's turn." : "")}
-        onCardClick={(payload) => {
-          if (!controlsActivePlayer) return;
-          setSelectedCard(payload);
-          setNotice("");
-          setGoldColor("");
-        }}
-        onChipClick={cycleChipSelection}
-        onCollectChips={() => dispatchGameAction({ type: "COLLECT_CHIPS", payload: { selectedChips } })}
-        onCollectNoble={(noble) => dispatchGameAction({ type: "COLLECT_NOBLE", payload: { noble } })}
-        onEndTurn={() => dispatchGameAction({ type: "END_TURN" })}
-        onUndo={() => dispatchGameAction({ type: "UNDO" })}
-        players={state.players}
-        selectedChips={selectedChips}
-        shouldEndTurn={shouldEndTurn}
-        table={state.game.table}
-        turnActions={state.game.turnActions}
-        undoEnabled={Boolean(state.game.undoSnapshot)}
-      />
+      {playing ? (
+        <ActionDock
+          collect={collect}
+          hasSelection={hasSelection}
+          onClearChips={() => setSelectedChips(emptyChips())}
+          onCollectChips={() => dispatchGameAction({ type: "COLLECT_CHIPS", payload: { selectedChips } })}
+          onEndTurn={() => dispatchGameAction({ type: "END_TURN" })}
+          onUndo={() => dispatchGameAction({ type: "UNDO" })}
+          selectedChips={selectedChips}
+          turnDone={turnDone}
+          undoEnabled={Boolean(state.game.undoSnapshot)}
+          waitingFor={activePlayer?.name}
+          yourTurn={controlsActivePlayer}
+        />
+      ) : null}
 
       {selectedCard ? (
-        <div className="action-popover">
-          <div>
-            <strong>{selectedCard.card.id}</strong>
-            <span>
-              {selectedCard.source === "reserved" ? `Reserved by ${selectedCard.card.ownerName}` : `Level ${selectedCard.card.level}`}
-            </span>
-          </div>
-          {activePlayer?.chips.yellow > 0 ? (
-            <label>
-              Gold for
-              <select value={goldColor} onChange={(event) => setGoldColor(event.target.value)}>
-                <option value="">Do not use</option>
-                {GEM_ORDER.map((color) => (
-                  <option key={color} value={color}>
-                    {GEM_LABELS[color]}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          <div className="popover-actions">
-            <button
-              disabled={state.game.turnActions.main || busy}
-              type="button"
-              onClick={() => dispatchGameAction({ type: "COLLECT_CARD", payload: { selectedCard, goldColor } })}
-            >
-              Collect
-            </button>
-            {selectedCard.source === "market" ? (
-              <button
-                disabled={state.game.turnActions.main || busy || bankCount(state.game.table.bank, "yellow") <= 0}
-                type="button"
-                onClick={() => dispatchGameAction({ type: "RESERVE_CARD", payload: { selectedCard } })}
-              >
-                Reserve
-              </button>
-            ) : null}
-            <button type="button" onClick={() => setSelectedCard(null)}>
-              Close
-            </button>
-          </div>
-        </div>
+        <CardSheet
+          busy={busy}
+          card={selectedCard.card}
+          goldLeft={bankCount(state.game.table.bank, "yellow")}
+          mainUsed={state.game.turnActions.main}
+          onBuy={() => dispatchGameAction({ type: "COLLECT_CARD", payload: { selectedCard } })}
+          onClose={() => setSelectedCard(null)}
+          onReserve={() => dispatchGameAction({ type: "RESERVE_CARD", payload: { selectedCard } })}
+          player={activePlayer}
+          source={selectedCard.source}
+        />
       ) : null}
 
-      {!onlineEnabled && setupOpen ? (
-        <LocalSetupModal onStart={localStartGame} />
-      ) : null}
+      {!onlineEnabled && setupOpen ? <LocalSetupModal onStart={localStartGame} /> : null}
 
       {shouldShowLobby ? (
         <LobbyScreen
@@ -754,12 +811,7 @@ export function GameScreen() {
       ) : null}
 
       {resetOpen ? (
-        <ResetModal
-          busy={busy}
-          notice={notice}
-          onClose={() => setResetOpen(false)}
-          onReset={resetOnlineTable}
-        />
+        <ResetModal busy={busy} notice={notice} onClose={() => setResetOpen(false)} onReset={resetOnlineTable} />
       ) : null}
 
       {state.status === "finished" ? (
@@ -769,6 +821,8 @@ export function GameScreen() {
           winner={state.game.winner}
         />
       ) : null}
+
+      {shouldShowLobby ? null : <Toast message={notice} onDismiss={() => setNotice("")} />}
     </main>
   );
 }

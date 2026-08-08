@@ -1,103 +1,104 @@
+import { nobleProgress } from "../engine";
 import { BankPanel } from "./BankPanel";
-import { CardRow } from "./CardRow";
+import { CardRow, ReservedCard } from "./CardRow";
+import { HistoryPanel } from "./HistoryPanel";
 import { NobleCard } from "./NobleCard";
 import { PlayerPanel } from "./PlayerPanel";
 
 export function GameBoard({
   activePlayerId,
   canTakeNoble,
+  chipBlockerFor,
   currentDeviceId,
   history,
-  notice,
+  maxChips,
   onCardClick,
   onChipClick,
-  onCollectChips,
   onCollectNoble,
-  onEndTurn,
-  onUndo,
+  playRef,
   players,
+  selectedCardId,
   selectedChips,
-  shouldEndTurn,
   table,
-  turnActions,
-  undoEnabled,
+  viewer,
 }) {
   return (
-    <div className="game-layout">
-      <section className="table-area" aria-label="Splendor table">
-        <div className="table-top">
-          <BankPanel
-            bank={table.bank}
-            collectDisabled={turnActions.main}
-            onChipClick={onChipClick}
-            onCollect={onCollectChips}
-            selectedChips={selectedChips}
-          />
-          <div className="noble-strip">
-            {table.nobles.map((noble, index) => (
-              <NobleCard
-                canCollect={!turnActions.noble && canTakeNoble(noble)}
-                index={index}
-                key={noble.id}
-                noble={noble}
-                onClick={() => onCollectNoble(noble)}
-              />
-            ))}
-          </div>
-        </div>
+    <div className="layout">
+      <section className="felt" aria-label="Bàn chơi">
+        <BankPanel
+          bank={table.bank}
+          blockerFor={chipBlockerFor}
+          onChipClick={onChipClick}
+          selectedChips={selectedChips}
+        />
 
-        <div className="market-rows">
-          {table.rows.map((row) => (
-            <CardRow key={row.level} onCardClick={onCardClick} row={row} />
-          ))}
-        </div>
-
-        {table.reserved.length ? (
-          <section className="reserved-row" aria-label="Reserved cards">
-            <div className="row-label">Reserved</div>
-            <div className="row-cards">
-              {table.reserved.map((card) => (
-                <CardRow.ReservedCard
-                  activePlayerId={activePlayerId}
-                  card={card}
-                  key={card.id}
+        <div className="felt-play" ref={playRef}>
+          <div className="felt-inner">
+            <div className="market">
+              {table.rows.map((row) => (
+                <CardRow
+                  key={row.level}
                   onCardClick={onCardClick}
+                  row={row}
+                  selectedCardId={selectedCardId}
+                  viewer={viewer}
                 />
               ))}
+
+              {table.reserved.length ? (
+                <div className="reserved" aria-label="Thẻ đang giữ">
+                  <div className="reserved-label">Đang giữ</div>
+                  <div className="reserved-cards">
+                    {table.reserved.map((card) => (
+                      <ReservedCard
+                        activePlayerId={activePlayerId}
+                        card={card}
+                        key={card.id}
+                        onCardClick={onCardClick}
+                        selectedCardId={selectedCardId}
+                        viewer={viewer}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
-          </section>
-        ) : null}
+
+            <div className="nobles" aria-label="Quý tộc">
+              {table.nobles.map((noble, index) => {
+                const progress = nobleProgress(viewer, noble);
+                return (
+                  <NobleCard
+                    breakdown={progress.breakdown}
+                    canCollect={canTakeNoble(noble)}
+                    index={index}
+                    key={noble.id}
+                    noble={noble}
+                    onClick={() => onCollectNoble(noble)}
+                    ready={progress.ready}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        </div>
       </section>
 
-      <div className="side-area">
-        <section className="history-panel" aria-label="History">
-          <div className="panel-heading">
-            <div className="panel-title">History</div>
-            <div className="history-actions">
-              <button className="small-button" disabled={!undoEnabled} type="button" onClick={onUndo}>
-                Undo
-              </button>
-              <button className={`small-button${shouldEndTurn ? " end-turn-ready" : ""}`} type="button" onClick={onEndTurn}>
-                End Turn
-              </button>
-            </div>
-          </div>
-          {notice ? <div className="notice-line">{notice}</div> : null}
-          <div className="history-list">
-            {history.map((item, index) => (
-              <p key={`${item}-${index}`}>{item}</p>
-            ))}
-          </div>
-        </section>
-        {players.map((player) => (
-          <PlayerPanel
-            isActive={player.id === activePlayerId}
-            isOwned={Boolean(currentDeviceId && player.ownerDeviceId === currentDeviceId)}
-            key={player.id}
-            player={player}
-          />
-        ))}
-      </div>
+      <aside className="rail">
+        <div className="players">
+          {players.map((player, index) => (
+            <PlayerPanel
+              isActive={player.id === activePlayerId}
+              isOwned={Boolean(currentDeviceId && player.ownerDeviceId === currentDeviceId)}
+              key={player.id}
+              maxChips={maxChips}
+              player={player}
+              seat={index}
+            />
+          ))}
+        </div>
+        <HistoryPanel history={history} />
+      </aside>
     </div>
   );
 }
