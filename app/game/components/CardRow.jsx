@@ -21,24 +21,3 @@ export function CardRow({ onCardClick, row, selectedCardId, viewer }) {
   );
 }
 
-export function ReservedCard({ activePlayerId, card, onCardClick, selectedCardId, viewer }) {
-  const isOwner = card.ownerId === activePlayerId;
-
-  return (
-    <div className="reserved-card">
-      <span className="reserved-owner">{card.ownerName}</span>
-      <DevelopmentCard
-        breakdown={viewer ? costBreakdown(viewer, card) : null}
-        card={card}
-        disabled={!isOwner}
-        onClick={() => {
-          if (isOwner) onCardClick({ card, source: "reserved" });
-        }}
-        selected={selectedCardId === card.id}
-        status={isOwner && viewer ? cardStatus(viewer, card) : null}
-      />
-    </div>
-  );
-}
-
-CardRow.ReservedCard = ReservedCard;

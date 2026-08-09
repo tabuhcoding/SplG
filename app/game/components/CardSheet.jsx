@@ -4,14 +4,15 @@ import { DevelopmentCard } from "./DevelopmentCard";
 import { GemSprite } from "./GemSprite";
 
 /**
- * Detail sheet for a tapped card. Gold is spent automatically for whatever the
- * player is short, so there is nothing to configure before buying.
+ * Detail sheet for a tapped card. Any card can be opened just to read it — the
+ * buttons decide what you may actually do. Gold is spent automatically for
+ * whatever the player is short, so there is nothing to configure before buying.
  */
-export function CardSheet({ busy, card, goldLeft = 0, mainUsed, onBuy, onClose, onReserve, player, source }) {
+export function CardSheet({ busy, canAct, card, goldLeft = 0, isOwner, note, onBuy, onClose, onReserve, player, source }) {
   const result = player ? canAfford(player, card) : null;
   const breakdown = player ? costBreakdown(player, card) : null;
   const rows = GEM_ORDER.filter((color) => (card.cost[color] ?? 0) > 0);
-  const canReserve = source === "market" && goldLeft > 0;
+  const reserved = source === "reserved";
 
   return (
     <div className="sheet-backdrop" onClick={onClose} role="presentation">
@@ -31,7 +32,7 @@ export function CardSheet({ busy, card, goldLeft = 0, mainUsed, onBuy, onClose, 
               <strong>
                 {card.points > 0 ? `+${card.points} điểm` : "Không điểm"} · bonus {GEM_LABELS[card.color]}
               </strong>
-              <span>{source === "reserved" ? `Thẻ ${card.ownerName} đang giữ` : `Thẻ cấp ${card.level}`}</span>
+              <span>{reserved ? `${card.ownerName} đang giữ` : `Thẻ cấp ${card.level}`}</span>
             </div>
 
             <div className="pay-table">
@@ -74,22 +75,27 @@ export function CardSheet({ busy, card, goldLeft = 0, mainUsed, onBuy, onClose, 
           <button className="btn btn-ghost" onClick={onClose} type="button">
             Đóng
           </button>
-          {source === "market" ? (
+          {!reserved ? (
             <button
               className="btn btn-quiet"
-              disabled={mainUsed || busy || !canReserve}
+              disabled={!canAct || busy || goldLeft <= 0}
               onClick={onReserve}
-              title={canReserve ? "Giữ thẻ và nhận 1 chip vàng" : "Ngân hàng hết chip vàng"}
+              title={goldLeft > 0 ? "Giữ thẻ và nhận 1 chip vàng" : "Ngân hàng hết chip vàng"}
               type="button"
             >
               Giữ thẻ
             </button>
           ) : null}
-          <button className="btn btn-primary" disabled={mainUsed || busy || !result?.ok} onClick={onBuy} type="button">
+          <button
+            className="btn btn-primary"
+            disabled={!canAct || !isOwner || busy || !result?.ok}
+            onClick={onBuy}
+            type="button"
+          >
             Mua thẻ
           </button>
         </div>
-        {mainUsed ? <div className="sheet-note">Lượt này đã dùng hành động chính rồi.</div> : null}
+        {note ? <div className="sheet-note">{note}</div> : null}
       </section>
     </div>
   );

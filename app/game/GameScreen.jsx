@@ -80,8 +80,8 @@ function useBoardScale(zoom, hasReserved) {
       if (wide) {
         const available = window.innerHeight - node.getBoundingClientRect().top - 108;
         // Three market rows, plus the shorter reserved row once someone holds a card.
-        const rows = BASE_SIZES.cardHeight * (hasReserved ? 3.62 : 3);
-        const chrome = gap * (hasReserved ? 3 : 2) + (hasReserved ? 22 : 0);
+        const rows = BASE_SIZES.cardHeight * (hasReserved ? 3.72 : 3);
+        const chrome = gap * (hasReserved ? 3 : 2) + (hasReserved ? 48 : 0);
         next = Math.min(next, (available - chrome) / rows);
       }
 
@@ -676,6 +676,17 @@ export function GameScreen() {
   const canCollectNoble = (noble) =>
     controlsActivePlayer && !state.game.turnActions.noble && canTakeNoble(activePlayer, noble);
 
+  /** Why the card sheet's buttons are off — shown under them so nobody guesses. */
+  const sheetNote = (() => {
+    if (!selectedCard) return "";
+    if (!controlsActivePlayer) return "Chưa tới lượt máy này — đang xem thôi.";
+    if (selectedCard.source === "reserved" && selectedCard.card.ownerId !== activePlayer?.id) {
+      return `Thẻ này của ${selectedCard.card.ownerName}, chỉ chủ thẻ mới mua được.`;
+    }
+    if (state.game.turnActions.main) return "Lượt này đã dùng hành động chính rồi.";
+    return "";
+  })();
+
   if (blockedFromPlaying) {
     return <BlockedTable notice={notice} onReset={resetOnlineTable} />;
   }
@@ -747,10 +758,6 @@ export function GameScreen() {
           history={state.game.history}
           maxChips={state.game.settings.maxChips}
           onCardClick={(payload) => {
-            if (!controlsActivePlayer) {
-              setNotice("Chưa tới lượt máy này.");
-              return;
-            }
             setSelectedCard(payload);
             setNotice("");
           }}
@@ -784,13 +791,15 @@ export function GameScreen() {
       {selectedCard ? (
         <CardSheet
           busy={busy}
+          canAct={controlsActivePlayer && !state.game.turnActions.main}
           card={selectedCard.card}
           goldLeft={bankCount(state.game.table.bank, "yellow")}
-          mainUsed={state.game.turnActions.main}
+          isOwner={selectedCard.source !== "reserved" || selectedCard.card.ownerId === activePlayer?.id}
+          note={sheetNote}
           onBuy={() => dispatchGameAction({ type: "COLLECT_CARD", payload: { selectedCard } })}
           onClose={() => setSelectedCard(null)}
           onReserve={() => dispatchGameAction({ type: "RESERVE_CARD", payload: { selectedCard } })}
-          player={activePlayer}
+          player={viewer}
           source={selectedCard.source}
         />
       ) : null}

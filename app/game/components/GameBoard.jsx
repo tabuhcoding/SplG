@@ -1,9 +1,10 @@
 import { nobleProgress } from "../engine";
 import { BankPanel } from "./BankPanel";
-import { CardRow, ReservedCard } from "./CardRow";
+import { CardRow } from "./CardRow";
 import { HistoryPanel } from "./HistoryPanel";
 import { NobleCard } from "./NobleCard";
 import { PlayerPanel } from "./PlayerPanel";
+import { ReservedStrip } from "./ReservedStrip";
 
 export function GameBoard({
   activePlayerId,
@@ -46,21 +47,14 @@ export function GameBoard({
               ))}
 
               {table.reserved.length ? (
-                <div className="reserved" aria-label="Thẻ đang giữ">
-                  <div className="reserved-label">Đang giữ</div>
-                  <div className="reserved-cards">
-                    {table.reserved.map((card) => (
-                      <ReservedCard
-                        activePlayerId={activePlayerId}
-                        card={card}
-                        key={card.id}
-                        onCardClick={onCardClick}
-                        selectedCardId={selectedCardId}
-                        viewer={viewer}
-                      />
-                    ))}
-                  </div>
-                </div>
+                <ReservedStrip
+                  activePlayerId={activePlayerId}
+                  onCardClick={onCardClick}
+                  players={players}
+                  reserved={table.reserved}
+                  selectedCardId={selectedCardId}
+                  viewer={viewer}
+                />
               ) : null}
             </div>
 
