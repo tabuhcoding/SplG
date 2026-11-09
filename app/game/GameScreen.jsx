@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BASE_SIZES, CHIP_ORDER, seatColor } from "./config";
 import {
@@ -728,6 +729,9 @@ export function GameScreen() {
         ) : null}
 
         <div className="topbar-actions">
+          <Link className="btn btn-ghost" href="/stats">
+            Thống kê bài
+          </Link>
           <div className="zoom">
             <button aria-label="Thu nhỏ" onClick={() => nudgeZoom(-0.1)} type="button">
               −
