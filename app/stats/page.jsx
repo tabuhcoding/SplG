@@ -2,7 +2,7 @@ import { StatsBoard } from "./StatsBoard";
 
 export const metadata = {
   title: "Thống kê bài Splendor",
-  description: "Số lá theo cấp và màu thưởng, cùng màu chip chiếm nhiều chi phí nhất.",
+  description: "Số lá theo cấp, màu chip nên gom, và chip nên giữ khi nhắm từng quý tộc.",
 };
 
 export default function StatsPage() {

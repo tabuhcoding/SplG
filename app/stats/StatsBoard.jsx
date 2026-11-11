@@ -3,8 +3,21 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import cards from "../../json/card.json";
+import nobles from "../../json/noble.json";
 import { GEM_HEX, GEM_LABELS, GEM_ORDER } from "../game/config";
-import { GEM_STONE, WHEEL, bonusProfile, costTotal, levelSummary, percent, previousOnWheel } from "./analyze";
+import {
+  GEM_STONE,
+  WHEEL,
+  bonusProfile,
+  costTotal,
+  formatAmount,
+  levelSummary,
+  nobleChipPlan,
+  nobleNeighbors,
+  nobleRequirements,
+  percent,
+  previousOnWheel,
+} from "./analyze";
 
 const LEVELS = [
   { id: 0, label: "Cả bộ" },
@@ -25,13 +38,34 @@ function GemName({ color, stone = false }) {
   );
 }
 
+function joinList(items) {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} và ${items[items.length - 1]}`;
+}
+
 function formatLeaders(profile) {
-  return profile.leaders.map((color) => GEM_LABELS[color].toLowerCase()).join(" và ");
+  return joinList(profile.leaders.map((color) => GEM_LABELS[color].toLowerCase()));
+}
+
+function requirementText(requirements) {
+  return requirements.map((item) => `${item.count} ${GEM_LABELS[item.color].toLowerCase()}`).join(" + ");
+}
+
+function chipAdvice(plan) {
+  const names = plan.ranked.map((color) => GEM_LABELS[color].toLowerCase());
+  const amounts = plan.ranked.map((color) => formatAmount(plan.pressure[color]));
+  if (amounts[0] === amounts[1] && amounts[1] === amounts[2]) {
+    return `Giữ ${joinList(names.slice(0, 3))} ngang nhau`;
+  }
+  if (amounts[0] === amounts[1]) return `Giữ ${names[0]} và ${names[1]} ngang nhau`;
+  if (amounts[1] === amounts[2]) return `Giữ ${names[0]}, rồi ${names[1]} và ${names[2]}`;
+  return `Giữ ${names[0]}, rồi ${names[1]}`;
 }
 
 export function StatsBoard() {
   const [level, setLevel] = useState(0);
   const [bonus, setBonus] = useState("red");
+  const [nobleId, setNobleId] = useState(nobles[0].id);
 
   const byLevel = useMemo(() => [0, 1, 2, 3].map((id) => levelSummary(cards, id)), []);
   const current = byLevel[level];
@@ -46,6 +80,11 @@ export function StatsBoard() {
     [bonus, level],
   );
 
+  const selectedNoble = nobles.find((noble) => noble.id === nobleId) ?? nobles[0];
+  const noblePlan = nobleChipPlan(cards, selectedNoble, 1);
+  const neighbors = nobleNeighbors(nobles, selectedNoble).slice(0, 2);
+  const noblePeak = Math.max(...WHEEL.map((color) => noblePlan.pressure[color]));
+
   const ruby = {
     all: bonusProfile(cards, 0, "red"),
     one: bonusProfile(cards, 1, "red"),
@@ -57,7 +96,7 @@ export function StatsBoard() {
     <main className="deck-stats">
       <header className="deck-stats-top">
         <div>
-          <p className="deck-kicker">Bộ 90 lá development</p>
+          <p className="deck-kicker">90 lá development · 10 quý tộc</p>
           <h1>Thống kê bài Splendor</h1>
           <p className="deck-lead">
             Chi phí và điểm trong <code>json/card.json</code> là bộ 90 lá Splendor in sẵn. Phần được gán ngẫu
@@ -316,6 +355,93 @@ export function StatsBoard() {
                   .map((color) => `${card.cost[color]} ${GEM_LABELS[color].toLowerCase()}`)
                   .join(" · ")}
               </span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="deck-panel" id="quy-toc">
+        <div className="deck-panel-head">
+          <h2>10 lá quý tộc</h2>
+        </div>
+        <div className="deck-facts">
+          <article>
+            <strong>Đều 3 điểm</strong>
+            <p>5 lá đòi 4 bonus của hai màu kề nhau. 5 lá đòi 3 bonus của ba màu liền trên vòng.</p>
+          </article>
+          <article>
+            <strong>Chấm bonus, không trừ chip</strong>
+            <p>Chip nên giữ là chip để mua lá cấp 1 đúng các màu quý tộc đang đòi.</p>
+          </article>
+          <article>
+            <strong>Bàn chỉ lật một phần</strong>
+            <p>Luật gốc lật số người chơi cộng 1. Repo này xáo rồi lật cố định 4 trong 10 lá.</p>
+          </article>
+        </div>
+
+        <div className="deck-noble-grid" role="group" aria-label="Chọn quý tộc">
+          {nobles.map((noble) => {
+            const plan = nobleChipPlan(cards, noble, 1);
+            return (
+              <button
+                aria-pressed={noble.id === selectedNoble.id}
+                className="deck-noble"
+                key={noble.id}
+                onClick={() => setNobleId(noble.id)}
+                type="button"
+              >
+                <b>3 điểm</b>
+                <span>{requirementText(plan.requirements)}</span>
+                <small>{chipAdvice(plan)}</small>
+              </button>
+            );
+          })}
+        </div>
+
+        <p className="deck-lead">
+          Lá đang chọn đòi {requirementText(noblePlan.requirements)}. Đường cấp 1 của từng màu:{" "}
+          {joinList(
+            noblePlan.feeds.map(
+              (feed) =>
+                `${feed.count} lá ${GEM_LABELS[feed.color].toLowerCase()} nghiêng ${joinList(
+                  feed.leaders.map((color) => GEM_LABELS[color].toLowerCase()),
+                )}`,
+            ),
+          )}
+          . Cộng theo số lá phải mua, chip nên giữ nhất là{" "}
+          <b>
+            {GEM_LABELS[noblePlan.ranked[0]].toLowerCase()} (khoảng {formatAmount(noblePlan.pressure[noblePlan.ranked[0]])}{" "}
+            viên)
+          </b>
+          , rồi {GEM_LABELS[noblePlan.ranked[1]].toLowerCase()} (
+          {formatAmount(noblePlan.pressure[noblePlan.ranked[1]])} viên).
+        </p>
+
+        <div className="deck-bars">
+          {noblePlan.ranked.map((color) => {
+            const share = percent(noblePlan.pressure[color], noblePeak);
+            return (
+              <div className="deck-bar" key={color}>
+                <GemName color={color} />
+                <div className="deck-bar-track">
+                  <span style={{ width: `${share}%`, background: GEM_HEX[color] }} />
+                </div>
+                <strong>khoảng {formatAmount(noblePlan.pressure[color])} viên</strong>
+                <small>{share}% so với màu cao nhất</small>
+              </div>
+            );
+          })}
+        </div>
+        <p className="deck-note">
+          Số viên là ước lượng nếu mua đủ số lá cấp 1 trung bình của các màu bị đòi. Quý tộc thường được ghép từ các lá
+          rẻ này. Lá cấp 2 giá 6 viên cùng màu là một đường khác: giữ đúng màu thưởng đó.
+        </p>
+        <ul className="deck-ruby">
+          {neighbors.map((neighbor) => (
+            <li key={neighbor.noble.id}>
+              Đủ lá này rồi thì thêm{" "}
+              {neighbor.missing.map((item) => `${item.count} ${GEM_LABELS[item.color].toLowerCase()}`).join(" + ")} bonus
+              là tới quý tộc {requirementText(nobleRequirements(neighbor.noble))}.
             </li>
           ))}
         </ul>

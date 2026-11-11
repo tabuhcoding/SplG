@@ -1857,6 +1857,43 @@ button:disabled {
   padding: 8px 10px;
 }
 
+.deck-noble-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.deck-noble {
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  text-align: left;
+}
+
+.deck-noble b {
+  font-size: 13px;
+}
+
+.deck-noble span {
+  font-weight: 750;
+}
+
+.deck-noble small {
+  color: var(--ink-soft);
+  font-weight: 650;
+}
+
+.deck-noble[aria-pressed="true"] {
+  background: #f3faf6;
+  border-color: var(--felt);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--felt) 22%, transparent);
+}
+
 @media (max-width: 720px) {
   .deck-bar {
     grid-template-columns: 1fr auto;
